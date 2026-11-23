@@ -21,6 +21,8 @@ Deprecations:
 Changes:
 ^^^^^^^^
 
+- Fixed ``Connection.set_context`` retaining the previous context's certificate verification mode, depth, and callback instead of adopting the new context's settings.
+- Added ``Connection.set_verify_depth`` and ``Connection.get_verify_depth``.
 - Fixed a race in which an exception raised by a verify, ALPN selection, OCSP, or DTLS cookie callback for one ``Connection`` could be raised on an unrelated ``Connection`` created from the same ``Context`` and used concurrently from another thread. Exceptions from these callbacks are now tracked per ``Connection``. Discovered and reported by SecDim Security Research.
 - Fixed exceptions raised by a verify callback registered with ``Connection.set_verify`` being swallowed instead of being propagated to the caller.
 

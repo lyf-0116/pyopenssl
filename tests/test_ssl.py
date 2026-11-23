@@ -2647,6 +2647,79 @@ class TestConnection:
         del original, replacement
         collect()
 
+    def test_set_context_updates_verification(self) -> None:
+        """
+        `Connection.set_context` adopts the replacement context's verification
+        mode and depth when the connection has no explicit override.
+        """
+        original = Context(SSLv23_METHOD)
+        original.set_verify(VERIFY_PEER)
+        original.set_verify_depth(1)
+
+        replacement = Context(SSLv23_METHOD)
+        replacement.set_verify(VERIFY_NONE)
+        replacement.set_verify_depth(5)
+
+        connection = Connection(original, None)
+        connection.set_context(replacement)
+
+        assert connection.get_verify_mode() == VERIFY_NONE
+        assert connection.get_verify_depth() == 5
+
+    def test_set_context_preserves_connection_verification(self) -> None:
+        """
+        A verification override set on the connection survives a context
+        switch.
+        """
+        original = Context(SSLv23_METHOD)
+        replacement = Context(SSLv23_METHOD)
+        replacement.set_verify(VERIFY_NONE)
+        replacement.set_verify_depth(5)
+
+        connection = Connection(original, None)
+        connection.set_verify(VERIFY_PEER)
+        connection.set_verify_depth(2)
+        connection.set_context(replacement)
+
+        assert connection.get_verify_mode() == VERIFY_PEER
+        assert connection.get_verify_depth() == 2
+
+    def test_set_context_updates_verify_callback(self) -> None:
+        """
+        `Connection.set_context` switches to the replacement context's verify
+        callback instead of retaining the one from the original context.
+        """
+
+        def original_callback(
+            conn: Connection, cert: X509, errno: int, depth: int, ok: int
+        ) -> bool:  # pragma: no cover
+            return bool(ok)
+
+        def replacement_callback(
+            conn: Connection, cert: X509, errno: int, depth: int, ok: int
+        ) -> bool:  # pragma: no cover
+            return bool(ok)
+
+        original = Context(SSLv23_METHOD)
+        original.set_verify(VERIFY_PEER, original_callback)
+        replacement = Context(SSLv23_METHOD)
+        replacement.set_verify(VERIFY_PEER, replacement_callback)
+
+        connection = Connection(original, None)
+        connection.set_context(replacement)
+
+        assert connection._verify_helper is replacement._verify_helper
+        assert connection._verify_callback is replacement._verify_callback
+
+    def test_set_verify_depth_wrong_args(self) -> None:
+        """
+        `Connection.set_verify_depth` raises `TypeError` if called with a
+        non-`int` argument.
+        """
+        connection = Connection(Context(SSLv23_METHOD), None)
+        with pytest.raises(TypeError):
+            connection.set_verify_depth(None)  # type: ignore[arg-type]
+
     def test_set_tlsext_host_name_wrong_args(self) -> None:
         """
         If `Connection.set_tlsext_host_name` is called with a non-byte string

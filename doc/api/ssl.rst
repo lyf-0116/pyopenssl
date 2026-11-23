@@ -40,8 +40,8 @@ Context, Connection.
              VERIFY_PEER
              VERIFY_FAIL_IF_NO_PEER_CERT
 
-    These constants represent the verification mode used by the Context
-    object's :py:meth:`set_verify` method.
+    These constants represent the verification mode used by the Context and
+    Connection objects' :py:meth:`set_verify` methods.
 
 
 .. py:data:: FILETYPE_PEM

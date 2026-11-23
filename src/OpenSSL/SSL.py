@@ -504,6 +504,27 @@ class _VerifyHelper:
         )
 
 
+class _DefaultVerifyHelper:
+    """
+    A verification callback which preserves OpenSSL's default behaviour.
+
+    OpenSSL's ``SSL_set_verify`` does not clear an existing callback when
+    passed ``NULL``.  Installing this callback explicitly lets a connection
+    discard a callback inherited from its previous context.
+    """
+
+    def __init__(self) -> None:
+        def wrapper(ok, store_ctx):  # type: ignore[no-untyped-def]
+            return ok
+
+        self.callback = _ffi.callback(
+            "int (*)(int, X509_STORE_CTX *)", wrapper
+        )
+
+
+_default_verify_helper = _DefaultVerifyHelper()
+
+
 class _ALPNSelectHelper:
     """
     Wrap a callback such that it can be used as an ALPN selection callback.
@@ -1982,6 +2003,12 @@ class Connection:
         # do not point to a dangling reference
         self._verify_helper = context._verify_helper
         self._verify_callback = context._verify_callback
+        # None means the connection follows its Context. Once set_verify or
+        # set_verify_depth is called the corresponding value is owned by the
+        # connection and must survive a context switch.
+        self._verify_mode_override: int | None = None
+        self._verify_depth_override: int | None = None
+        self._verify_depth = context.get_verify_depth()
 
         # And likewise for the cookie callbacks
         self._cookie_generate_helper = context._cookie_generate_helper
@@ -2100,6 +2127,21 @@ class Connection:
         self._context = context
         self._context._used = True
 
+        if self._verify_mode_override is None:
+            mode = context.get_verify_mode()
+            self._verify_helper = context._verify_helper
+            self._verify_callback = context._verify_callback
+            callback = context._verify_callback
+            if callback is None:
+                callback = _default_verify_helper.callback
+            _lib.SSL_set_verify(self._ssl, mode, callback)
+
+        if self._verify_depth_override is None:
+            self._verify_depth = context.get_verify_depth()
+            set_verify_depth = getattr(_lib, "SSL_set_verify_depth", None)
+            if set_verify_depth is not None:
+                set_verify_depth(self._ssl, self._verify_depth)
+
     def set_options(self, options: int) -> int:
         """
         Add options. Options set before are not cleared!
@@ -2140,14 +2182,17 @@ class Connection:
         if not isinstance(mode, int):
             raise TypeError("mode must be an integer")
 
+        if callback is not None and not callable(callback):
+            raise TypeError("callback must be callable")
+
+        self._verify_mode_override = mode
         if callback is None:
             self._verify_helper = None
             self._verify_callback = None
-            _lib.SSL_set_verify(self._ssl, mode, _ffi.NULL)
+            _lib.SSL_set_verify(
+                self._ssl, mode, _default_verify_helper.callback
+            )
         else:
-            if not callable(callback):
-                raise TypeError("callback must be callable")
-
             self._verify_helper = _VerifyHelper(callback)
             self._verify_callback = self._verify_helper.callback
             _lib.SSL_set_verify(self._ssl, mode, self._verify_callback)
@@ -2160,6 +2205,36 @@ class Connection:
         :return: The verify mode
         """
         return _lib.SSL_get_verify_mode(self._ssl)
+
+    def set_verify_depth(self, depth: int) -> None:
+        """
+        Override the Context object's verify depth for this specific
+        connection. See :py:meth:`Context.set_verify_depth` for details.
+        """
+        if not isinstance(depth, int):
+            raise TypeError("depth must be an integer")
+
+        self._verify_depth_override = depth
+        self._verify_depth = depth
+        # cryptography does not currently expose the per-SSL depth setter, so
+        # keep the value on the Connection until that binding is available.
+        set_verify_depth = getattr(_lib, "SSL_set_verify_depth", None)
+        if set_verify_depth is not None:
+            set_verify_depth(self._ssl, depth)
+
+    def get_verify_depth(self) -> int:
+        """
+        Retrieve the Connection object's verify depth, as set by
+        :py:meth:`set_verify_depth` or inherited from its Context.
+
+        :return: The verify depth
+        """
+        if self._verify_depth_override is not None:
+            return self._verify_depth_override
+        get_verify_depth = getattr(_lib, "SSL_get_verify_depth", None)
+        if get_verify_depth is not None:
+            return get_verify_depth(self._ssl)
+        return self._verify_depth
 
     def use_certificate(self, cert: X509 | x509.Certificate) -> None:
         """
