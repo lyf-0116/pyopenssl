@@ -21,6 +21,11 @@ Deprecations:
 Changes:
 ^^^^^^^^
 
+- Added ``Connection.session_reused()``, which reports whether the completed
+  handshake actually reused a session. ``Connection.set_session()`` only
+  requests resumption and silently falls back to a full handshake when the
+  peer cannot resume the session; callers can now observe the outcome instead
+  of assuming the session was reused.
 - Fixed a race in which an exception raised by a verify, ALPN selection, OCSP, or DTLS cookie callback for one ``Connection`` could be raised on an unrelated ``Connection`` created from the same ``Context`` and used concurrently from another thread. Exceptions from these callbacks are now tracked per ``Connection``. Discovered and reported by SecDim Security Research.
 - Fixed exceptions raised by a verify callback registered with ``Connection.set_verify`` being swallowed instead of being propagated to the caller.
 

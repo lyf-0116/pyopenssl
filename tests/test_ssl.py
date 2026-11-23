@@ -3233,6 +3233,126 @@ class TestConnection:
         with pytest.raises(ValueError):
             client.set_session(originalSession)
 
+    def test_session_reused_unconnected(self) -> None:
+        """
+        `Connection.session_reused` returns `False` before any handshake has
+        taken place.
+        """
+        ctx = Context(SSLv23_METHOD)
+        connection = Connection(ctx, None)
+        assert connection.session_reused() is False
+
+    def test_session_reused_full_handshake(self) -> None:
+        """
+        `Connection.session_reused` returns `False` on both sides of a
+        connection established with a full handshake.
+        """
+        server, client = loopback()
+        assert client.session_reused() is False
+        assert server.session_reused() is False
+
+    def test_session_reused_after_resumption(self) -> None:
+        """
+        `Connection.session_reused` returns `True` on both sides when
+        `Connection.set_session` leads to an actual session resumption.
+        """
+        key = load_privatekey(FILETYPE_PEM, server_key_pem)
+        cert = load_certificate(FILETYPE_PEM, server_cert_pem)
+        ctx = Context(TLSv1_2_METHOD)
+        ctx.use_privatekey(key)
+        ctx.use_certificate(cert)
+        ctx.set_session_id(b"unity-test")
+
+        def makeServer(socket: socket) -> Connection:
+            server = Connection(ctx, socket)
+            server.set_accept_state()
+            return server
+
+        clientCtx = Context(SSLv23_METHOD)
+
+        def makeOriginalClient(socket: socket) -> Connection:
+            client = Connection(clientCtx, socket)
+            client.set_connect_state()
+            return client
+
+        originalServer, originalClient = loopback(
+            server_factory=makeServer, client_factory=makeOriginalClient
+        )
+        originalSession = originalClient.get_session()
+        assert originalSession is not None
+        assert originalClient.session_reused() is False
+        assert originalServer.session_reused() is False
+
+        def makeClient(socket: socket) -> Connection:
+            client = Connection(clientCtx, socket)
+            client.set_connect_state()
+            client.set_session(originalSession)
+            return client
+
+        resumedServer, resumedClient = loopback(
+            server_factory=makeServer, client_factory=makeClient
+        )
+
+        assert resumedClient.session_reused() is True
+        assert resumedServer.session_reused() is True
+
+    @pytest.mark.skipif(
+        OP_NO_TICKET is None,
+        reason="OP_NO_TICKET unavailable - OpenSSL version may be too old",
+    )
+    def test_session_reused_false_when_resumption_declined(self) -> None:
+        """
+        `Connection.session_reused` exposes a failed resumption attempt: when
+        the server does not offer the presented session back, `set_session`
+        does not raise but the connection falls back to a full handshake and
+        `session_reused` reports `False`.
+        """
+        key = load_privatekey(FILETYPE_PEM, server_key_pem)
+        cert = load_certificate(FILETYPE_PEM, server_cert_pem)
+        ctx = Context(TLSv1_2_METHOD)
+        ctx.use_privatekey(key)
+        ctx.use_certificate(cert)
+        ctx.set_session_id(b"unity-test")
+        # Disable both resumption mechanisms on the server so it always
+        # negotiates a fresh session.
+        ctx.set_session_cache_mode(SESS_CACHE_OFF)
+        ctx.set_options(OP_NO_TICKET)
+
+        def makeServer(socket: socket) -> Connection:
+            server = Connection(ctx, socket)
+            server.set_accept_state()
+            return server
+
+        clientCtx = Context(SSLv23_METHOD)
+
+        def makeOriginalClient(socket: socket) -> Connection:
+            client = Connection(clientCtx, socket)
+            client.set_connect_state()
+            return client
+
+        originalServer, originalClient = loopback(
+            server_factory=makeServer, client_factory=makeOriginalClient
+        )
+        originalSession = originalClient.get_session()
+        assert originalSession is not None
+
+        def makeClient(socket: socket) -> Connection:
+            client = Connection(clientCtx, socket)
+            client.set_connect_state()
+            # The request is accepted even though resumption is impossible.
+            client.set_session(originalSession)
+            return client
+
+        resumedServer, resumedClient = loopback(
+            server_factory=makeServer, client_factory=makeClient
+        )
+
+        assert resumedClient.session_reused() is False
+        assert resumedServer.session_reused() is False
+        # The full handshake produced a new master key rather than reusing
+        # the original session's.
+        assert originalServer.master_key() != resumedServer.master_key()
+
     def test_wantWriteError(self) -> None:
         """
         `Connection` methods which generate output raise

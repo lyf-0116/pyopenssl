@@ -3075,6 +3075,12 @@ class Connection:
         one. OpenSSL requires (but does not verify) that sessions only be
         re-used with a compatible ``SSL_CTX``, so this is enforced here.
 
+        This only requests that the session be reused; it cannot guarantee
+        resumption. If the peer cannot or will not resume the session, the
+        handshake silently falls back to a full handshake. Use
+        :meth:`session_reused` after the handshake to check whether the
+        session was actually re-used.
+
         :param session: A Session instance representing the session to use.
         :returns: None
 
@@ -3091,6 +3097,25 @@ class Connection:
 
         result = _lib.SSL_set_session(self._ssl, session._session)
         _openssl_assert(result == 1)
+
+    def session_reused(self) -> bool:
+        """
+        Report whether the session negotiated during the handshake was reused.
+
+        :meth:`set_session` only arranges an *attempt* to resume a session.
+        Whether the attempt actually succeeds is decided by the peer during
+        the handshake; if it does not, OpenSSL silently performs a full
+        handshake instead. This method exposes the outcome so callers can
+        tell the two cases apart rather than assuming resumption happened.
+
+        :return: :data:`True` if the connection's handshake reused a session,
+            :data:`False` if a full handshake was performed (including when a
+            session was supplied via :meth:`set_session` but could not be
+            resumed), or when no handshake has happened yet.
+
+        .. versionadded:: 26.4.1
+        """
+        return _lib.SSL_session_reused(self._ssl) == 1
 
     def _get_finished_message(
         self, function: Callable[[Any, Any, int], int]
