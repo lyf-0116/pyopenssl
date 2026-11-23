@@ -1684,6 +1684,11 @@ class Context:
         "trusted" certificates without using the
         :meth:`load_verify_locations` method.
 
+        The returned store is only mutable until the context has been used to
+        create a :class:`Connection`.  Mutating it after that point would
+        change certificate verification for connections that are already in
+        use, so those writes raise :class:`ValueError` instead.
+
         :return: A X509Store object or None if it does not have one.
         """
         store = _lib.SSL_CTX_get_cert_store(self._context)
@@ -1693,6 +1698,7 @@ class Context:
 
         pystore = X509Store.__new__(X509Store)
         pystore._store = store
+        pystore._context = self
         return pystore
 
     @_require_not_used

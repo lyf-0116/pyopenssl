@@ -1930,6 +1930,33 @@ class TestContext:
         store = context.get_cert_store()
         assert isinstance(store, X509Store)
 
+    def test_get_cert_store_frozen_after_context_used(self) -> None:
+        """
+        A store obtained before the context is used becomes immutable once a
+        connection has been created, just like the context itself.
+        """
+        context = Context(SSLv23_METHOD)
+        store = context.get_cert_store()
+        assert store is not None
+
+        Connection(context, None)
+
+        with pytest.raises(ValueError):
+            store.add_cert(load_certificate(FILETYPE_PEM, root_cert_pem))
+
+    def test_get_cert_store_after_context_used_is_frozen(self) -> None:
+        """
+        A store obtained after the context is used is already immutable.
+        """
+        context = Context(SSLv23_METHOD)
+        Connection(context, None)
+
+        store = context.get_cert_store()
+        assert store is not None
+
+        with pytest.raises(ValueError):
+            store.add_cert(load_certificate(FILETYPE_PEM, root_cert_pem))
+
     def test_set_tlsext_use_srtp_not_bytes(self) -> None:
         """
         `Context.set_tlsext_use_srtp' enables negotiating SRTP keying material.

@@ -1290,6 +1290,22 @@ class X509StoreFlags:
     PARTIAL_CHAIN: int = _lib.X509_V_FLAG_PARTIAL_CHAIN
 
 
+F = typing.TypeVar("F", bound=Callable[..., Any])
+
+
+def _require_store_writable(f: F) -> F:
+    @functools.wraps(f)
+    def inner(self: X509Store, *args: Any, **kwargs: Any) -> Any:
+        if self._context is not None and self._context._used:
+            raise ValueError(
+                "Context has already been used to create a Connection, it "
+                "cannot be mutated again"
+            )
+        return f(self, *args, **kwargs)
+
+    return typing.cast(F, inner)
+
+
 class X509Store:
     """
     An X.509 store.
@@ -1307,7 +1323,9 @@ class X509Store:
     def __init__(self) -> None:
         store = _lib.X509_STORE_new()
         self._store = _ffi.gc(store, _lib.X509_STORE_free)
+        self._context: Any | None = None
 
+    @_require_store_writable
     def add_cert(self, cert: X509) -> None:
         """
         Adds a trusted certificate to this store.
@@ -1330,6 +1348,7 @@ class X509Store:
         res = _lib.X509_STORE_add_cert(self._store, cert._x509)
         _openssl_assert(res == 1)
 
+    @_require_store_writable
     def add_crl(self, crl: x509.CertificateRevocationList) -> None:
         """
         Add a certificate revocation list to this store.
@@ -1360,6 +1379,7 @@ class X509Store:
 
         _openssl_assert(_lib.X509_STORE_add_crl(self._store, crl) != 0)
 
+    @_require_store_writable
     def set_flags(self, flags: int) -> None:
         """
         Set verification flags to this store.
@@ -1384,6 +1404,7 @@ class X509Store:
         """
         _openssl_assert(_lib.X509_STORE_set_flags(self._store, flags) != 0)
 
+    @_require_store_writable
     def set_time(self, vfy_time: datetime.datetime) -> None:
         """
         Set the time against which the certificates are verified.
@@ -1408,6 +1429,7 @@ class X509Store:
         )
         _openssl_assert(_lib.X509_STORE_set1_param(self._store, param) != 0)
 
+    @_require_store_writable
     def load_locations(
         self,
         cafile: StrOrBytesPath | None,
