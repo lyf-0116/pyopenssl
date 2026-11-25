@@ -311,6 +311,16 @@ _PassphraseCallback = Callable[[int, bool, Optional[_T]], bytes]
 _VerifyCallback = Callable[["Connection", X509, int, int, int], bool]
 
 
+class _UnsetVerifyCallback:
+    """Sentinel type used when no verify callback argument was supplied."""
+
+    def __repr__(self) -> str:
+        return "_UNSET_VERIFY_CALLBACK"
+
+
+_UNSET_VERIFY_CALLBACK = _UnsetVerifyCallback()
+
+
 class X509VerificationCodes:
     """
     Success and error codes for X509 verification, as returned by the
@@ -502,6 +512,28 @@ class _VerifyHelper:
         self.callback = _ffi.callback(
             "int (*)(int, X509_STORE_CTX *)", wrapper
         )
+
+
+class _DefaultVerifyHelper:
+    """
+    A low-level verify callback which preserves OpenSSL's preverify result.
+
+    ``SSL_set_verify`` ignores a ``NULL`` callback when the SSL object already
+    has one. Installing this pass-through callback gives connections an
+    explicit way to replace an inherited or previously set Python callback
+    with OpenSSL's default behavior.
+    """
+
+    def __init__(self) -> None:
+        def wrapper(preverify_ok: int, store_ctx: Any) -> int:
+            return preverify_ok
+
+        self.callback = _ffi.callback(
+            "int (*)(int, X509_STORE_CTX *)", wrapper
+        )
+
+
+_default_verify_helper = _DefaultVerifyHelper()
 
 
 class _ALPNSelectHelper:
@@ -1357,7 +1389,9 @@ class Context:
         if callback is None:
             self._verify_helper = None
             self._verify_callback = None
-            _lib.SSL_CTX_set_verify(self._context, mode, _ffi.NULL)
+            _lib.SSL_CTX_set_verify(
+                self._context, mode, _default_verify_helper.callback
+            )
         else:
             if not callable(callback):
                 raise TypeError("callback must be callable")
@@ -2131,26 +2165,52 @@ class Connection:
         return _ffi.string(name)
 
     def set_verify(
-        self, mode: int, callback: _VerifyCallback | None = None
+        self,
+        mode: int,
+        callback: (
+            _VerifyCallback | _UnsetVerifyCallback | None
+        ) = _UNSET_VERIFY_CALLBACK,
     ) -> None:
         """
-        Override the Context object's verification flags for this specific
-        connection. See :py:meth:`Context.set_verify` for details.
+        Set the verification flags for this specific connection.
+
+        Verification settings are layered over the connection's
+        :class:`Context`. When *callback* is omitted, the callback currently
+        referenced by this connection is preserved; a newly created
+        connection starts with its Context's callback. Thus a mode-only call
+        changes only the mode and does not discard the companion callback.
+        Pass *callback* as :data:`None` explicitly to use OpenSSL's default
+        pass-through verification callback instead.
+
+        :param mode: The verify mode, with the same values as
+            :py:meth:`Context.set_verify`.
+        :param callback: The optional Python verification callback to use.
+            If omitted, the current callback is preserved; if :data:`None` is
+            passed explicitly, OpenSSL's default verification is used.
+
+        See :py:meth:`Context.set_verify` for the callback signature and
+        ``SSL_set_verify(3SSL)`` for further details.
         """
         if not isinstance(mode, int):
             raise TypeError("mode must be an integer")
 
-        if callback is None:
+        if isinstance(callback, _UnsetVerifyCallback):
+            callback_pointer = self._verify_callback
+            if callback_pointer is None:
+                callback_pointer = _ffi.NULL
+        elif callback is None:
             self._verify_helper = None
             self._verify_callback = None
-            _lib.SSL_set_verify(self._ssl, mode, _ffi.NULL)
+            callback_pointer = _default_verify_helper.callback
         else:
             if not callable(callback):
                 raise TypeError("callback must be callable")
 
             self._verify_helper = _VerifyHelper(callback)
             self._verify_callback = self._verify_helper.callback
-            _lib.SSL_set_verify(self._ssl, mode, self._verify_callback)
+            callback_pointer = self._verify_callback
+
+        _lib.SSL_set_verify(self._ssl, mode, callback_pointer)
 
     def get_verify_mode(self) -> int:
         """
